@@ -160,7 +160,7 @@ void PerformanceCalculator::calculateMergeSortTime(const std::vector<std::vector
     }
     auto end = std::chrono::high_resolution_clock::now();
 
-    mergeSortTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();  // Store time in milliseconds
+    mergeSortTime = std::chrono::duration<double, std::milli>(end - start).count();
 }
 
 // Method to calculate and store Heap Sort time
@@ -174,15 +174,15 @@ void PerformanceCalculator::calculateHeapSortTime(const std::vector<std::vector<
     }
     auto end = std::chrono::high_resolution_clock::now();
 
-    heapSortTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();  // Store time in milliseconds
+    heapSortTime = std::chrono::duration<double, std::milli>(end - start).count();
 }
 
 // Get the recorded time for Merge Sort
-long long PerformanceCalculator::getMergeSortTime() const {
+double PerformanceCalculator::getMergeSortTime() const {
     return mergeSortTime;
 }
 
 // Get the recorded time for Heap Sort
-long long PerformanceCalculator::getHeapSortTime() const {
+double PerformanceCalculator::getHeapSortTime() const {
     return heapSortTime;
 }

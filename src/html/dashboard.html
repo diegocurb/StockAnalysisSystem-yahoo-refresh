@@ -5,8 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Companies - Historical Stock Comparison</title>
-    <!-- Added back the Chart.js script for the graph -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* CSS styles remain unchanged */
         /* Global styling */
@@ -143,7 +141,17 @@
         #source-status {
             font-size: 14px;
             line-height: 1.5;
+            color: #52616f;
+            margin-bottom: 18px;
         }
+
+        #source-status p { margin: 5px 0; }
+        details { margin-top: 12px; color: #52616f; font-size: 13px; }
+        summary { cursor: pointer; }
+        .result-cards { display: flex; flex-wrap: wrap; gap: 16px; }
+        .result-cards .company-results { flex: 1; min-width: 180px; background: white; padding: 16px; border-radius: 8px; }
+        .return-value { font-size: 26px; font-weight: 600; color: #177e70; margin: 10px 0 !important; }
+        .sort-chart { width: 100%; height: auto; display: block; margin-bottom: 20px; }
 
         #source-status code {
             overflow-wrap: anywhere;
@@ -194,8 +202,8 @@
         <p>Select two companies from the sidebar to compare.</p>
         <label for="data-source">Data source:</label>
         <select id="data-source">
-            <option value="original">Original saved CSV files</option>
-            <option value="yahoo">Refreshed Yahoo daily history</option>
+            <option value="original">Saved data</option>
+            <option value="yahoo">Yahoo Finance</option>
         </select>
         <div id="source-status" role="status" aria-live="polite"></div>
         <div id="comparison">
@@ -248,13 +256,8 @@
         let busy = false;
         let generation = 0;
         let requestController = null;
-        let sortChart = null;
 
         function clearResults() {
-            if (sortChart) {
-                sortChart.destroy();
-                sortChart = null;
-            }
             resultsDiv.replaceChildren();
         }
 
@@ -294,9 +297,19 @@
         }
 
         function addRefreshInstructions() {
-            addText(sourceStatus, 'To fetch the latest available daily history, run this in the project folder:');
-            addText(sourceStatus, 'python scripts/refresh_yahoo.py --tickers AMZN MSFT --period 1y', 'code');
-            addText(sourceStatus, 'Then reload this page and select Refreshed Yahoo daily history. Existing downloaded history remains available when offline.');
+            const details = document.createElement('details');
+            addText(details, 'How to update prices', 'summary');
+            addText(details, 'Run this in the project folder, then reload this page:');
+            addText(details, 'python scripts/refresh_yahoo.py --tickers AMZN MSFT --period 1y', 'code');
+            sourceStatus.appendChild(details);
+        }
+
+        function friendlyDate(value, includeTime = false) {
+            if (!value) return 'Unavailable';
+            const date = new Date(includeTime ? value : value + 'T12:00:00');
+            if (Number.isNaN(date.getTime())) return value;
+            return includeTime ? date.toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})
+                : date.toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'});
         }
 
         async function readResponse(response) {
@@ -322,13 +335,13 @@
             companyList.replaceChildren();
             if (sourceSelect.value === 'original') {
                 populateCompanies(originalCompanies);
-                addText(sourceStatus, 'Using the original saved datasets. These files are not refreshed by the Yahoo download command.');
+                addText(sourceStatus, 'Compare the original saved datasets.');
                 return;
             }
 
             busy = true;
             updateSelection();
-            addText(sourceStatus, 'Loading saved Yahoo history…');
+            addText(sourceStatus, 'Loading Yahoo prices…');
             const controller = new AbortController();
             requestController = controller;
             try {
@@ -342,18 +355,22 @@
                         seenFiles.add(item.file);
                         return true;
                     })
-                    .map(item => ({ name: String(item.name || item.symbol || item.file), id: item.file }));
+                    .map(item => {
+                        const names = {AMZN:'Amazon', MSFT:'Microsoft', AAPL:'Apple', NVDA:'NVIDIA', GOOGL:'Google', GOOG:'Google', META:'Meta', TSLA:'Tesla', AMD:'AMD', ADBE:'Adobe', NFLX:'Netflix'};
+                        return {name: names[item.symbol] ? `${names[item.symbol]} (${item.symbol})` : String(item.name || item.symbol || item.file), id:item.file};
+                    });
                 populateCompanies(companies);
                 sourceStatus.replaceChildren();
+                const dates = (manifest.datasets || []).map(item => item.as_of).filter(Boolean).sort();
                 addText(sourceStatus, companies.length
-                    ? `Source: ${manifest.source || 'Yahoo Finance'}. Fetched (UTC): ${manifest.fetched_at_utc || 'Unavailable'}. Using saved daily history; comparison does not fetch new quotes.`
-                    : 'No downloaded Yahoo datasets are available yet.');
-                if (manifest.delay_note) addText(sourceStatus, String(manifest.delay_note));
+                    ? `Yahoo Finance · Prices through ${friendlyDate(dates[0])} · Updated ${friendlyDate(manifest.fetched_at_utc, true)}`
+                    : 'No Yahoo prices downloaded yet.');
+                if (companies.length) addText(sourceStatus, 'Daily price history. Prices may be delayed.');
                 addRefreshInstructions();
             } catch (error) {
                 if (currentGeneration !== generation || error.name === 'AbortError') return;
                 sourceStatus.replaceChildren();
-                addText(sourceStatus, `Yahoo history is unavailable: ${error.message}`);
+                addText(sourceStatus, 'Yahoo prices are unavailable. Update your download to get started.');
                 addRefreshInstructions();
             } finally {
                 if (currentGeneration === generation) {
@@ -413,92 +430,89 @@
             const company1Data = data[company1Key];
             const company2Data = data[company2Key];
             clearResults();
-            addText(resultsDiv, 'Historical Comparison Results:', 'h3');
-            renderCompany(selection[0], company1Data);
-            renderCompany(selection[1], company2Data);
-            addText(resultsDiv, 'These metrics describe past price movements over each displayed date range. They do not forecast future prices.');
+            addText(resultsDiv, 'Comparison', 'h3');
             displaySortTimesChart(company1Data, company2Data, selection);
+            const cards = document.createElement('div');
+            cards.className = 'result-cards';
+            resultsDiv.appendChild(cards);
+            renderCompany(selection[0], company1Data, cards);
+            renderCompany(selection[1], company2Data, cards);
+            addText(resultsDiv, 'Historical performance; not a prediction.');
         }
 
         function formatNumber(value) {
             return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(4) : 'N/A';
         }
 
-        function renderCompany(company, data) {
+        function renderCompany(company, data, parent) {
             const section = document.createElement('div');
             section.className = 'company-results';
-            resultsDiv.appendChild(section);
+            parent.appendChild(section);
             addText(section, company.name, 'strong');
-            addText(section, `Heap Sort Time (ms): ${formatNumber(data.heap_sort_time_ms)}`);
-            addText(section, `Merge Sort Time (ms): ${formatNumber(data.merge_sort_time_ms)}`);
-            addText(section, `Daily Sharpe (assumed annual risk-free 1.5%): ${formatNumber(data.sharpe_ratio)}`);
-            addText(section, `Close price return (%): ${formatNumber(data.total_return)}`);
+            const priceReturn = typeof data.total_return === 'number' ? `${data.total_return >= 0 ? '+' : ''}${data.total_return.toFixed(2)}%` : 'N/A';
+            addText(section, priceReturn).className = 'return-value';
+            addText(section, 'Price return');
+            addText(section, `Daily Sharpe: ${typeof data.sharpe_ratio === 'number' ? data.sharpe_ratio.toFixed(3) : 'N/A'}`);
             const info = data.data_info || {};
-            addText(section, `Source: ${info.source || 'Original saved CSV'}`);
-            if (info.fetched_at_utc) addText(section, `Fetched (UTC): ${info.fetched_at_utc}`);
-            addText(section, `Data as of: ${info.as_of || 'Unavailable'}`);
-            addText(section, `Date range: ${info.first_date || 'Unavailable'} to ${info.as_of || 'Unavailable'}`);
-            if (info.rows != null) addText(section, `Daily observations: ${info.rows}`);
-            if (info.interval) addText(section, `Interval: ${info.interval}`);
-            addText(section, `Price basis: ${info.price_basis || 'Raw closing price'}`);
-            if (info.delay_note) addText(section, String(info.delay_note));
+            addText(section, `${friendlyDate(info.first_date)} – ${friendlyDate(info.as_of)}`);
+            const details = document.createElement('details');
+            addText(details, 'Data details', 'summary');
+            addText(details, `Source: ${info.source || 'Saved data'}`);
+            if (info.fetched_at_utc) addText(details, `Updated: ${friendlyDate(info.fetched_at_utc, true)}`);
+            if (info.rows != null) addText(details, `${info.rows} daily prices`);
+            if (info.price_basis) addText(details, `Price basis: ${info.price_basis}`);
+            addText(details, 'Daily Sharpe uses an assumed annual risk-free rate of 1.5%. Price return excludes dividends.');
+            if (info.delay_note) addText(details, String(info.delay_note));
+            section.appendChild(details);
         }
 
         function displaySortTimesChart(company1Data, company2Data, selection) {
-            if (typeof Chart === 'undefined') {
-                addText(resultsDiv, 'The chart is unavailable. Sort timings are shown above.');
-                return;
+            addText(resultsDiv, 'Sorting time · Lower is faster', 'h4');
+            const ns = 'http://www.w3.org/2000/svg';
+            const svg = document.createElementNS(ns, 'svg');
+            svg.setAttribute('viewBox', '0 0 640 280');
+            svg.setAttribute('role', 'img');
+            svg.setAttribute('aria-label', 'Heap sort and merge sort times in milliseconds for the two selected companies');
+            svg.id = 'sort-times-chart';
+            svg.classList.add('sort-chart');
+            resultsDiv.appendChild(svg);
+            function draw(tag, attrs, text) {
+                const element = document.createElementNS(ns, tag);
+                Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+                if (text != null) element.textContent = text;
+                svg.appendChild(element);
+                return element;
             }
-            const canvas = document.createElement('canvas');
-            resultsDiv.appendChild(canvas);
-            const labels = ['Heap Sort Time (ms)', 'Merge Sort Time (ms)'];
-            const data1 = [company1Data.heap_sort_time_ms, company1Data.merge_sort_time_ms];
-            const data2 = [company2Data.heap_sort_time_ms, company2Data.merge_sort_time_ms];
-            sortChart = new Chart(canvas, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: selection[0].name,
-                            data: data1,
-                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
-                            borderColor: 'rgba(75, 192, 192, 1)',
-                            borderWidth: 1
-                        },
-                        {
-                            label: selection[1].name,
-                            data: data2,
-                            backgroundColor: 'rgba(255, 99, 132, 0.5)',
-                            borderColor: 'rgba(255, 99, 132, 1)',
-                            borderWidth: 1
-                        }
-                    ]
-                },
-                options: {
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Time (ms)'
-                            }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            display: true,
-                            position: 'top'
-                        },
-                        tooltip: {
-                            callbacks: {
-                                title: function(context) {
-                                    return context[0].label;
-                                }
-                            }
-                        }
-                    }
-                }
+            const times = [company1Data, company2Data].map(data =>
+                [data.heap_sort_time_ms, data.merge_sort_time_ms].map(value =>
+                    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0));
+            const ceiling = Math.max(...times.flat(), 0.0001) * 1.25;
+            const colors = ['#149b8a', '#4e79bc'];
+            draw('text', {x:64,y:18,fill:'#52616f','font-size':12}, 'Milliseconds');
+            for (let tick = 0; tick <= 4; tick++) {
+                const y = 210 - tick * 42;
+                draw('line', {x1:64,y1:y,x2:620,y2:y,stroke:'#d5dfe4'});
+                draw('text', {x:56,y:y+4,'text-anchor':'end',fill:'#52616f','font-size':11},
+                    tick ? Number((ceiling * tick / 4).toPrecision(3)).toString() : '0');
+            }
+            ['Heap sort', 'Merge sort'].forEach((label, group) => {
+                const center = 200 + group * 280;
+                draw('text', {x:center,y:232,'text-anchor':'middle',fill:'#2c3e50','font-size':13}, label);
+                times.forEach((values, company) => {
+                    const value = values[group];
+                    const height = value / ceiling * 168;
+                    const x = center - 52 + company * 58;
+                    const bar = draw('rect', {x,y:210-height,width:46,height,rx:3,fill:colors[company],'data-time-ms':value});
+                    const tooltip = document.createElementNS(ns, 'title');
+                    tooltip.textContent = `${selection[company].name}: ${value.toFixed(4)} ms`;
+                    bar.appendChild(tooltip);
+                    draw('text', {x:x+23,y:204-height,'text-anchor':'middle',fill:'#2c3e50','font-size':11}, value.toFixed(4));
+                });
+            });
+            selection.forEach((company, index) => {
+                const x = 70 + index * 280;
+                draw('rect', {x,y:253,width:12,height:12,rx:2,fill:colors[index]});
+                draw('text', {x:x+20,y:264,fill:'#2c3e50','font-size':12}, company.name);
             });
         }
     });

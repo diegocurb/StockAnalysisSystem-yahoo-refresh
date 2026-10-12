@@ -23,7 +23,7 @@ Start the built application from the project directory. With a single-configurat
 
 For Visual Studio builds, use `.\build\Release\StockMarketAnalysisSystem.exe`; on Linux/macOS, use `./build/StockMarketAnalysisSystem`. If starting elsewhere, pass the project directory as the first argument, for example `StockMarketAnalysisSystem.exe "C:\path\to\project"`.
 
-Open [http://localhost:8000](http://localhost:8000). The dashboard initially uses **Original saved CSV files**. Select two companies and click **Compare**. The original stored datasets work without installing Python or fetching Yahoo data. Chart.js requires an internet connection for the timing graph.
+Open [http://localhost:8000](http://localhost:8000). The dashboard initially uses **Saved data**. Select two companies and click **Compare**. The original stored datasets work without installing Python or fetching Yahoo data. The sorting-time graph works offline and displays fractional milliseconds.
 
 ## Fetch and compare recent daily history
 
@@ -34,7 +34,7 @@ python -m pip install -r requirements-refresh.txt
 python scripts/refresh_yahoo.py --tickers AMZN MSFT --period 1y
 ```
 
-Reload the dashboard page, select **Refreshed Yahoo daily history**, choose two symbols, and compare. After another download, reload the page or switch to **Original saved CSV files** and back to the Yahoo source, then select your symbols again. The command downloads data; changing the selected data source reads the saved catalog. A comparison itself does not fetch new quotes.
+Reload the dashboard page, select **Yahoo Finance**, choose two symbols, and compare. After another download, reload the page or switch to **Saved data** and back to the Yahoo source, then select your symbols again. The command downloads data; changing the selected data source reads the saved catalog. A comparison itself does not fetch new quotes.
 
 You can substitute other stock symbols and periods, for example `--tickers AAPL NVDA --period 6mo`. The default is AMZN and MSFT over one year. Refreshing replaces the available Yahoo selection with the requested symbols, so request every symbol you want in that selection together.
 
@@ -54,7 +54,7 @@ Some original dashboard entries point to `dataa/<name>.csv` even though their fi
 
 The displayed return is the percentage change between the first and last valid Close price. Yahoo datasets use **Yahoo Close with `auto_adjust=False`**, excluding dividend adjustment; Yahoo's Close may already reflect stock splits. The app performs no additional corporate-action adjustment. This is a price return, not a dividend-inclusive investment total return.
 
-Sharpe is a **daily, unannualized historical ratio** using the existing population-standard-deviation convention and the example 1.5% annual risk-free assumption. It describes past returns relative to their variability; it does not predict future prices. Compare datasets with the same requested period and check their displayed date ranges. The dashboard's higher-return comparison is a historical comparison, not an investment recommendation. Millisecond sort timings may be zero for small daily datasets.
+Sharpe is a **daily, unannualized historical ratio** using the existing population-standard-deviation convention and the example 1.5% annual risk-free assumption. It describes past returns relative to their variability; it does not predict future prices. Compare datasets with the same requested period and check their displayed date ranges. The dashboard's higher-return comparison is a historical comparison, not an investment recommendation. Sort timings retain fractional milliseconds so small daily datasets remain visible on the chart.
 
 ## Verification
 
@@ -70,3 +70,4 @@ A real refresh on October 12, 2026 with yfinance 1.7.0 and pandas 3.0.6 returned
 ## Interview walkthrough
 
 “The original project compared stock data from stored CSV files in C++. A recent extension adds a Python helper that requests the latest available Yahoo daily history and converts it into the same CSV format. The dashboard can select that refreshed cache, while the existing C++ code still calculates historical return and Sharpe and compares merge-sort and heap-sort timing. The helper validates the download before publishing it so a failed refresh preserves the previous usable data, and the dashboard displays the source and data dates. It uses daily historical data; it does not stream live prices or forecast them.”
+

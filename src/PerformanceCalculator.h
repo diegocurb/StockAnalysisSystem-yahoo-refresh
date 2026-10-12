@@ -25,14 +25,14 @@ public:
     void calculateHeapSortTime(const std::vector<std::vector<std::string>>& data, bool (*comp)(const std::string&, const std::string&));
 
     // Get the recorded time for Merge Sort
-    long long getMergeSortTime() const;
+    double getMergeSortTime() const;
 
     // Get the recorded time for Heap Sort
-    long long getHeapSortTime() const;
+    double getHeapSortTime() const;
 
 private:
-    long long mergeSortTime = 0;  // Time for Merge Sort in milliseconds
-    long long heapSortTime = 0;   // Time for Heap Sort in milliseconds
+    double mergeSortTime = 0;  // Time for Merge Sort in fractional milliseconds
+    double heapSortTime = 0;   // Time for Heap Sort in fractional milliseconds
 };
 
 #endif
