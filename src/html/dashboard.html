@@ -4,7 +4,7 @@
     <!-- Head content remains unchanged -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Compare Companies - Investment Decision</title>
+    <title>Compare Companies - Historical Stock Comparison</title>
     <!-- Added back the Chart.js script for the graph -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -134,6 +134,21 @@
             font-size: 16px;
         }
 
+        #data-source {
+            padding: 8px;
+            margin: 0 0 8px 8px;
+            max-width: 100%;
+        }
+
+        #source-status {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        #source-status code {
+            overflow-wrap: anywhere;
+        }
+
         pre {
             background-color: #f4f4f4;
             padding: 10px;
@@ -177,13 +192,19 @@
     <main class="content">
         <h1>Compare Companies</h1>
         <p>Select two companies from the sidebar to compare.</p>
+        <label for="data-source">Data source:</label>
+        <select id="data-source">
+            <option value="original">Original saved CSV files</option>
+            <option value="yahoo">Refreshed Yahoo daily history</option>
+        </select>
+        <div id="source-status" role="status" aria-live="polite"></div>
         <div id="comparison">
             <h3>Selected Companies:</h3>
             <p id="selected1">Company 1: None</p>
             <p id="selected2">Company 2: None</p>
             <button id="compareBtn" disabled>Compare</button>
         </div>
-        <div id="results">
+        <div id="results" aria-live="polite">
             <!-- Results will be dynamically populated here -->
         </div>
     </main>
@@ -191,7 +212,7 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {
-        const companies = [
+        const originalCompanies = [
             { name: "Adobe", id: "dataa/adobe.csv" },
             { name: "Amazon", id: "dataa/amazon.csv" },
             { name: "AMD", id: "dataa/amd.csv" },
@@ -220,160 +241,233 @@
         const selected2 = document.getElementById('selected2');
         const compareBtn = document.getElementById('compareBtn');
         const resultsDiv = document.getElementById('results');
+        const sourceSelect = document.getElementById('data-source');
+        const sourceStatus = document.getElementById('source-status');
 
         let selectedCompanies = [];
+        let busy = false;
+        let generation = 0;
+        let requestController = null;
+        let sortChart = null;
 
-        // Populate the sidebar with companies
-        companies.forEach(company => {
-            const listItem = document.createElement('li');
-            listItem.textContent = company.name;
-            listItem.dataset.id = company.id; // Store file path as data-id
-            listItem.addEventListener('click', () => {
-                if (selectedCompanies.includes(company)) {
-                    selectedCompanies = selectedCompanies.filter(c => c !== company);
-                    listItem.classList.remove('selected');
-                } else if (selectedCompanies.length < 2) {
-                    selectedCompanies.push(company);
-                    listItem.classList.add('selected');
-                }
+        function clearResults() {
+            if (sortChart) {
+                sortChart.destroy();
+                sortChart = null;
+            }
+            resultsDiv.replaceChildren();
+        }
 
-                selected1.textContent = `Company 1: ${selectedCompanies[0]?.name || 'None'}`;
-                selected2.textContent = `Company 2: ${selectedCompanies[1]?.name || 'None'}`;
-                compareBtn.disabled = selectedCompanies.length !== 2;
+        function updateSelection() {
+            selected1.textContent = `Company 1: ${selectedCompanies[0]?.name || 'None'}`;
+            selected2.textContent = `Company 2: ${selectedCompanies[1]?.name || 'None'}`;
+            compareBtn.disabled = busy || selectedCompanies.length !== 2;
+        }
+
+        function populateCompanies(companies) {
+            companyList.replaceChildren();
+            companies.forEach(company => {
+                const listItem = document.createElement('li');
+                listItem.textContent = company.name;
+                listItem.dataset.id = company.id;
+                listItem.addEventListener('click', () => {
+                    if (busy) return;
+                    if (selectedCompanies.includes(company)) {
+                        selectedCompanies = selectedCompanies.filter(c => c !== company);
+                        listItem.classList.remove('selected');
+                    } else if (selectedCompanies.length < 2) {
+                        selectedCompanies.push(company);
+                        listItem.classList.add('selected');
+                    }
+                    clearResults();
+                    updateSelection();
+                });
+                companyList.appendChild(listItem);
             });
-            companyList.appendChild(listItem);
-        });
+        }
 
-        compareBtn.addEventListener('click', async () => {
-            if (selectedCompanies[0].id === selectedCompanies[1].id) {
-                alert('Please select two different companies.');
+        function addText(parent, text, tag = 'p') {
+            const element = document.createElement(tag);
+            element.textContent = text;
+            parent.appendChild(element);
+            return element;
+        }
+
+        function addRefreshInstructions() {
+            addText(sourceStatus, 'To fetch the latest available daily history, run this in the project folder:');
+            addText(sourceStatus, 'python scripts/refresh_yahoo.py --tickers AMZN MSFT --period 1y', 'code');
+            addText(sourceStatus, 'Then reload this page and select Refreshed Yahoo daily history. Existing downloaded history remains available when offline.');
+        }
+
+        async function readResponse(response) {
+            const text = await response.text();
+            let data;
+            try { data = JSON.parse(text); } catch (_) { /* Show readable backend text below. */ }
+            if (!response.ok) {
+                throw new Error(data?.error || text || `Request failed (${response.status}).`);
+            }
+            if (!data || typeof data !== 'object') throw new Error('The server returned an unreadable response.');
+            return data;
+        }
+
+        async function changeSource() {
+            const currentGeneration = ++generation;
+            if (requestController) requestController.abort();
+            requestController = null;
+            busy = false;
+            selectedCompanies = [];
+            clearResults();
+            updateSelection();
+            sourceStatus.replaceChildren();
+            companyList.replaceChildren();
+            if (sourceSelect.value === 'original') {
+                populateCompanies(originalCompanies);
+                addText(sourceStatus, 'Using the original saved datasets. These files are not refreshed by the Yahoo download command.');
                 return;
             }
 
-            resultsDiv.innerHTML = ''; // Clear previous results
-            const loadingMessage = document.createElement('p');
-            loadingMessage.textContent = 'Loading...';
-            resultsDiv.appendChild(loadingMessage);
+            busy = true;
+            updateSelection();
+            addText(sourceStatus, 'Loading saved Yahoo history…');
+            const controller = new AbortController();
+            requestController = controller;
+            try {
+                const response = await fetch('http://localhost:8000/yahoo-history', { signal: controller.signal });
+                const manifest = await readResponse(response);
+                if (currentGeneration !== generation) return;
+                const seenFiles = new Set();
+                const companies = (Array.isArray(manifest.datasets) ? manifest.datasets : [])
+                    .filter(item => {
+                        if (typeof item.file !== 'string' || !item.file || seenFiles.has(item.file)) return false;
+                        seenFiles.add(item.file);
+                        return true;
+                    })
+                    .map(item => ({ name: String(item.name || item.symbol || item.file), id: item.file }));
+                populateCompanies(companies);
+                sourceStatus.replaceChildren();
+                addText(sourceStatus, companies.length
+                    ? `Source: ${manifest.source || 'Yahoo Finance'}. Fetched (UTC): ${manifest.fetched_at_utc || 'Unavailable'}. Using saved daily history; comparison does not fetch new quotes.`
+                    : 'No downloaded Yahoo datasets are available yet.');
+                if (manifest.delay_note) addText(sourceStatus, String(manifest.delay_note));
+                addRefreshInstructions();
+            } catch (error) {
+                if (currentGeneration !== generation || error.name === 'AbortError') return;
+                sourceStatus.replaceChildren();
+                addText(sourceStatus, `Yahoo history is unavailable: ${error.message}`);
+                addRefreshInstructions();
+            } finally {
+                if (currentGeneration === generation) {
+                    busy = false;
+                    requestController = null;
+                    updateSelection();
+                }
+            }
+        }
+
+        sourceSelect.addEventListener('change', changeSource);
+        changeSource();
+
+        compareBtn.addEventListener('click', async () => {
+            if (busy || selectedCompanies.length !== 2) return;
+            const selection = selectedCompanies.slice();
+            const currentGeneration = generation;
+            busy = true;
+            updateSelection();
+            clearResults();
+            const loadingMessage = addText(resultsDiv, 'Loading comparison…');
+            const controller = new AbortController();
+            requestController = controller;
 
             try {
-                const file1 = selectedCompanies[0].id;
-                const file2 = selectedCompanies[1].id;
-
                 const response = await fetch('http://localhost:8000/compare', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ file1, file2 })
+                    body: JSON.stringify({ file1: selection[0].id, file2: selection[1].id }),
+                    signal: controller.signal
                 });
-
-                if (!response.ok) {
-                    throw new Error('Failed to fetch data from the backend');
-                }
-
-                const data = await response.json();
-                console.log('Data received from backend:', data); // For debugging
-                displayResults(data, file1, file2);
+                const data = await readResponse(response);
+                if (currentGeneration !== generation) return;
+                displayResults(data, selection);
             } catch (error) {
-                console.error('Error fetching data:', error);
-                alert('An error occurred while fetching data. Please try again.');
+                if (currentGeneration !== generation || error.name === 'AbortError') return;
+                clearResults();
+                addText(resultsDiv, `Could not compare these companies: ${error.message}`);
             } finally {
                 loadingMessage.remove();
+                if (currentGeneration === generation) {
+                    busy = false;
+                    requestController = null;
+                    updateSelection();
+                }
             }
         });
 
-        function displayResults(data, file1, file2) {
-            // Find the matching keys in the data object
+        function displayResults(data, selection) {
             const dataKeys = Object.keys(data);
-
             function findDataKey(filePath) {
-                return dataKeys.find(key => key.endsWith(filePath));
+                return dataKeys.find(key => key.replace(/\\/g, '/').endsWith(filePath));
             }
-
-            const company1Key = findDataKey(file1);
-            const company2Key = findDataKey(file2);
-
-            if (!company1Key || !company2Key) {
-                console.error('Could not find data for selected companies.');
-                alert('An error occurred: Data for the selected companies was not found.');
-                return;
-            }
-
-            // Get the data for each company
+            const company1Key = findDataKey(selection[0].id);
+            const company2Key = findDataKey(selection[1].id);
+            if (!company1Key || !company2Key) throw new Error('Results for a selected company were missing.');
             const company1Data = data[company1Key];
             const company2Data = data[company2Key];
-
-            // Create a simple text representation
-            const resultsHtml = `
-                <h3>Comparison Results:</h3>
-                <div class="company-results">
-                    <p><strong>${selectedCompanies[0].name}</strong></p>
-                    <p>Heap Sort Time (ms): ${company1Data.heap_sort_time_ms}</p>
-                    <p>Merge Sort Time (ms): ${company1Data.merge_sort_time_ms}</p>
-                    <p>Sharpe Ratio: ${company1Data.sharpe_ratio.toFixed(4)}</p>
-                    <p>Total Return: ${company1Data.total_return.toFixed(4)}</p>
-                </div>
-                <div class="company-results">
-                    <p><strong>${selectedCompanies[1].name}</strong></p>
-                    <p>Heap Sort Time (ms): ${company2Data.heap_sort_time_ms}</p>
-                    <p>Merge Sort Time (ms): ${company2Data.merge_sort_time_ms}</p>
-                    <p>Sharpe Ratio: ${company2Data.sharpe_ratio.toFixed(4)}</p>
-                    <p>Total Return: ${company2Data.total_return.toFixed(4)}</p>
-                </div>
-            `;
-
-            // Determine which company is better to invest in
-            let recommendation = '';
-
-            // Logic to compare based on Sharpe ratio and Total Return
-            if (company1Data.sharpe_ratio > company2Data.sharpe_ratio) {
-                recommendation = `${selectedCompanies[0].name} may be a better investment based on a higher Sharpe ratio.`;
-            } else if (company1Data.sharpe_ratio < company2Data.sharpe_ratio) {
-                recommendation = `${selectedCompanies[1].name} may be a better investment based on a higher Sharpe ratio.`;
-            } else {
-                // Sharpe ratios are equal, compare total return
-                if (company1Data.total_return > company2Data.total_return) {
-                    recommendation = `${selectedCompanies[0].name} may be a better investment based on a higher total return.`;
-                } else if (company1Data.total_return < company2Data.total_return) {
-                    recommendation = `${selectedCompanies[1].name} may be a better investment based on a higher total return.`;
-                } else {
-                    recommendation = `Both companies have similar Sharpe ratios and total returns. Further analysis is recommended.`;
-                }
-            }
-
-            // Add the recommendation to the results
-            resultsDiv.innerHTML = resultsHtml + `<p><strong>Recommendation:</strong> ${recommendation}</p>`;
-
-            // Display the graph comparing merge sort and heap sort times
-            displaySortTimesChart(company1Data, company2Data);
+            clearResults();
+            addText(resultsDiv, 'Historical Comparison Results:', 'h3');
+            renderCompany(selection[0], company1Data);
+            renderCompany(selection[1], company2Data);
+            addText(resultsDiv, 'These metrics describe past price movements over each displayed date range. They do not forecast future prices.');
+            displaySortTimesChart(company1Data, company2Data, selection);
         }
 
-        function displaySortTimesChart(company1Data, company2Data) {
-            const existingCanvas = document.querySelector('#results canvas');
-            if (existingCanvas) {
-                existingCanvas.remove();
-            }
+        function formatNumber(value) {
+            return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(4) : 'N/A';
+        }
 
+        function renderCompany(company, data) {
+            const section = document.createElement('div');
+            section.className = 'company-results';
+            resultsDiv.appendChild(section);
+            addText(section, company.name, 'strong');
+            addText(section, `Heap Sort Time (ms): ${formatNumber(data.heap_sort_time_ms)}`);
+            addText(section, `Merge Sort Time (ms): ${formatNumber(data.merge_sort_time_ms)}`);
+            addText(section, `Daily Sharpe (assumed annual risk-free 1.5%): ${formatNumber(data.sharpe_ratio)}`);
+            addText(section, `Close price return (%): ${formatNumber(data.total_return)}`);
+            const info = data.data_info || {};
+            addText(section, `Source: ${info.source || 'Original saved CSV'}`);
+            if (info.fetched_at_utc) addText(section, `Fetched (UTC): ${info.fetched_at_utc}`);
+            addText(section, `Data as of: ${info.as_of || 'Unavailable'}`);
+            addText(section, `Date range: ${info.first_date || 'Unavailable'} to ${info.as_of || 'Unavailable'}`);
+            if (info.rows != null) addText(section, `Daily observations: ${info.rows}`);
+            if (info.interval) addText(section, `Interval: ${info.interval}`);
+            addText(section, `Price basis: ${info.price_basis || 'Raw closing price'}`);
+            if (info.delay_note) addText(section, String(info.delay_note));
+        }
+
+        function displaySortTimesChart(company1Data, company2Data, selection) {
+            if (typeof Chart === 'undefined') {
+                addText(resultsDiv, 'The chart is unavailable. Sort timings are shown above.');
+                return;
+            }
             const canvas = document.createElement('canvas');
             resultsDiv.appendChild(canvas);
-
             const labels = ['Heap Sort Time (ms)', 'Merge Sort Time (ms)'];
-
             const data1 = [company1Data.heap_sort_time_ms, company1Data.merge_sort_time_ms];
             const data2 = [company2Data.heap_sort_time_ms, company2Data.merge_sort_time_ms];
-
-            new Chart(canvas, {
+            sortChart = new Chart(canvas, {
                 type: 'bar',
                 data: {
                     labels: labels,
                     datasets: [
                         {
-                            label: selectedCompanies[0].name,
+                            label: selection[0].name,
                             data: data1,
                             backgroundColor: 'rgba(75, 192, 192, 0.5)',
                             borderColor: 'rgba(75, 192, 192, 1)',
                             borderWidth: 1
                         },
                         {
-                            label: selectedCompanies[1].name,
+                            label: selection[1].name,
                             data: data2,
                             backgroundColor: 'rgba(255, 99, 132, 0.5)',
                             borderColor: 'rgba(255, 99, 132, 1)',

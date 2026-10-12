@@ -5,6 +5,33 @@
 #include <iostream>
 #include <numeric>
 #include <map>
+#include <cmath>
+#include <limits>
+
+namespace {
+bool readClose(const std::vector<std::string>& row, double& close) {
+    if (row.size() <= 5) {
+        return false;
+    }
+    try {
+        size_t parsed = 0;
+        close = std::stod(row[5], &parsed);
+        return parsed == row[5].size() && std::isfinite(close) && close > 0.0;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::vector<std::vector<std::string>> benchmarkRows(const std::vector<std::vector<std::string>>& data) {
+    std::vector<std::vector<std::string>> rows;
+    for (size_t i = 1; i < data.size(); ++i) {
+        if (data[i].size() > 1) {
+            rows.push_back(data[i]);
+        }
+    }
+    return rows;
+}
+}
 
 
 
@@ -12,13 +39,12 @@ std::vector<double> PerformanceCalculator::calculateDailyReturns(const std::vect
     std::vector<double> dailyReturns;
 
     for (size_t i = 2; i < aggregatedData.size(); ++i) { // Start from 2 to skip the header row
-        try {
-            double closeToday = std::stod(aggregatedData[i][5]);
-            double closeYesterday = std::stod(aggregatedData[i - 1][5]);
+        double closeToday, closeYesterday;
+        if (readClose(aggregatedData[i], closeToday) && readClose(aggregatedData[i - 1], closeYesterday)) {
             double dailyReturn = ((closeToday - closeYesterday) / closeYesterday) * 100.0;
-            dailyReturns.push_back(dailyReturn);
-        } catch (...) {
-            continue; // Skip invalid rows
+            if (std::isfinite(dailyReturn)) {
+                dailyReturns.push_back(dailyReturn);
+            }
         }
     }
 
@@ -27,28 +53,9 @@ std::vector<double> PerformanceCalculator::calculateDailyReturns(const std::vect
 
 
 double PerformanceCalculator::calculateSharpeRatio(const std::vector<std::vector<std::string>>& aggregatedData, double riskFreeRate) {
-    if (aggregatedData.size() < 3) { // At least two data points plus header
-        std::cerr << "Error: Not enough data points to calculate Sharpe Ratio." << std::endl;
-        return 0.0;
-    }
-
-    std::vector<double> dailyReturns;
-
-    // Calculate daily returns from aggregated Close prices
-    for (size_t i = 2; i < aggregatedData.size(); ++i) { // Start from 2 to skip the header row
-        try {
-            double closeToday = std::stod(aggregatedData[i][5]);       // Current day's Close
-            double closeYesterday = std::stod(aggregatedData[i - 1][5]); // Previous day's Close
-            double dailyReturn = ((closeToday - closeYesterday) / closeYesterday) * 100.0; // Percentage change
-            dailyReturns.push_back(dailyReturn);
-        } catch (...) {
-            continue; // Skip rows with invalid data
-        }
-    }
-
-    if (dailyReturns.empty()) {
-        std::cerr << "Error: No valid daily returns calculated." << std::endl;
-        return 0.0;
+    const auto dailyReturns = calculateDailyReturns(aggregatedData);
+    if (dailyReturns.size() < 2 || !std::isfinite(riskFreeRate) || riskFreeRate <= -100.0) {
+        return std::numeric_limits<double>::quiet_NaN();
     }
 
     // Calculate average daily return
@@ -63,23 +70,30 @@ double PerformanceCalculator::calculateSharpeRatio(const std::vector<std::vector
     variance /= dailyReturns.size();
     double stdDev = std::sqrt(variance);
 
-    // Calculate Sharpe Ratio
-    double sharpeRatio = (avgReturn - riskFreeRate) / stdDev;
+    const double roundingTolerance = std::numeric_limits<double>::epsilon() * (std::abs(avgReturn) + 1.0) * 8.0;
+    if (!std::isfinite(stdDev) || stdDev <= roundingTolerance) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    // Daily returns are percentages; convert the annual percentage rate to the same period and units.
+    const double dailyRiskFreeRate = (std::pow(1.0 + riskFreeRate / 100.0, 1.0 / 252.0) - 1.0) * 100.0;
+    double sharpeRatio = (avgReturn - dailyRiskFreeRate) / stdDev;
 
     return sharpeRatio;
 }
 
 std::vector<std::vector<std::string>> PerformanceCalculator::aggregateByDate(const std::vector<std::vector<std::string>>& data) {
+    if (data.empty() || data[0].size() <= 5) {
+        return {};
+    }
     std::map<std::string, std::vector<double>> dateToCloseValues;
 
     // Group Close values by Date
     for (size_t i = 1; i < data.size(); ++i) { // Start from 1 to skip the header
-        try {
+        double close;
+        if (readClose(data[i], close) && !data[i][1].empty()) {
             std::string date = data[i][1]; // Date column
-            double close = std::stod(data[i][5]); // Close column
             dateToCloseValues[date].push_back(close);
-        } catch (...) {
-            continue; // Skip invalid rows
         }
     }
 
@@ -107,26 +121,18 @@ double PerformanceCalculator::calculateTotalReturn(const std::vector<std::vector
 
     // Find the first positive "Close" value from the beginning
     for (size_t i = 1; i < data.size(); ++i) { // Start from row 1 to skip the header
-        try {
-            startPrice = std::stod(data[i][5]); // Accessing the "Close" column at index 5
-            if (startPrice > 0.0) {
-                break; // Exit once a positive value is found
-            }
-        } catch (...) {
-            continue; // Skip rows with invalid "Close" values
+        if (readClose(data[i], startPrice)) {
+            break;
         }
+        startPrice = -1.0;
     }
 
     // Find the last positive "Close" value from the end
     for (size_t i = data.size() - 1; i > 0; --i) { // Start from the last row
-        try {
-            endPrice = std::stod(data[i][5]); // Accessing the "Close" column at index 5
-            if (endPrice > 0.0) {
-                break; // Exit once a positive value is found
-            }
-        } catch (...) {
-            continue; // Skip rows with invalid "Close" values
+        if (readClose(data[i], endPrice)) {
+            break;
         }
+        endPrice = -1.0;
     }
 
     // Ensure both prices are valid
@@ -144,22 +150,28 @@ double PerformanceCalculator::calculateTotalReturn(const std::vector<std::vector
 
 
 // Method to calculate and store Merge Sort time
-void PerformanceCalculator::calculateMergeSortTime(std::vector<std::vector<std::string>>& data, bool (*comp)(const std::string&, const std::string&)) {
+void PerformanceCalculator::calculateMergeSortTime(const std::vector<std::vector<std::string>>& data, bool (*comp)(const std::string&, const std::string&)) {
     MergeSort mergesort;
+    auto rows = benchmarkRows(data);
 
     auto start = std::chrono::high_resolution_clock::now();
-    mergesort.mergeSort(data, 1, data.size() - 1, comp);  // Sorting by the second column (Date)
+    if (rows.size() > 1) {
+        mergesort.mergeSort(rows, 0, rows.size() - 1, comp);
+    }
     auto end = std::chrono::high_resolution_clock::now();
 
     mergeSortTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();  // Store time in milliseconds
 }
 
 // Method to calculate and store Heap Sort time
-void PerformanceCalculator::calculateHeapSortTime(std::vector<std::vector<std::string>>& data, bool (*comp)(const std::string&, const std::string&)) {
+void PerformanceCalculator::calculateHeapSortTime(const std::vector<std::vector<std::string>>& data, bool (*comp)(const std::string&, const std::string&)) {
     Heap heapSort;
+    auto rows = benchmarkRows(data);
 
     auto start = std::chrono::high_resolution_clock::now();
-    heapSort.heapSort(data, 0, data.size() - 1, comp);  // Sorting by the second column (Date), use full range (0 to data.size()-1)
+    if (rows.size() > 1) {
+        heapSort.heapSort(rows, 0, rows.size() - 1, comp);
+    }
     auto end = std::chrono::high_resolution_clock::now();
 
     heapSortTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();  // Store time in milliseconds

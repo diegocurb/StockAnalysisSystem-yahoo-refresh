@@ -1,0 +1,2 @@
+# Daily history helper only; the original C++/offline mode needs no Python.
+yfinance>=0.2.54,<2
