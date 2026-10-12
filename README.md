@@ -2,7 +2,7 @@
 
 This isolated copy adds an on-demand Yahoo Finance history download to the existing C++ stock comparison application. The original app reads stored CSV files; this recent extension supplies fresh CSV files to the same comparison flow. It fetches the latest available **daily history**, not streaming or guaranteed real-time quotes, and does not forecast stock prices.
 
-Original project: [hassantennn/StockAnalysisSystem](https://github.com/hassantennn/StockAnalysisSystem), credited upstream to HHD Squad (Muhammad Hassan, Haya Shaikh, Diego Curbelo). This copy is on local branch `feature/yahoo-history-refresh`; no upstream files or repositories were changed.
+Original project: [hassantennn/StockAnalysisSystem](https://github.com/hassantennn/StockAnalysisSystem), credited upstream to HHD Squad (Muhammad Hassan, Haya Shaikh, Diego Curbelo). This extension is published separately in [diegocurb/StockAnalysisSystem-yahoo-refresh](https://github.com/diegocurb/StockAnalysisSystem-yahoo-refresh), preserving the original application and its saved CSV mode.
 
 ## Build and open
 
